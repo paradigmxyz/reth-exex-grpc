@@ -28,8 +28,7 @@ pub(crate) struct KonaArgsExt {
     #[clap(
         long = "kona.validation-mode",
         default_value = "trusted",
-        requires_if("engine-api", "kona.l2-engine-api-url"),
-        requires_if("engine-api", "kona.l2-engine-jwt")
+        requires_ifs([("engine-api", "kona.l2-engine-api-url"), ("engine-api", "kona.l2-engine-jwt")]),
     )]
     pub validation_mode: ValidationMode,
 

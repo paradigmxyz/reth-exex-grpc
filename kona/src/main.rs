@@ -134,8 +134,9 @@ impl<Node: FullNodeComponents> KonaExEx<Node> {
         }
 
         // Peek the the next prepared attributes and validate them
-        if let Some(attributes) = self.pipeline.peek() {
-            match self.validator.validate(attributes).await {
+        match self.pipeline.peek() {
+            None => debug!(target: "loop", "No prepared attributes to validate"),
+            Some(attributes) => match self.validator.validate(attributes).await {
                 Ok(true) => info!(target: "loop", "Attributes validated"),
                 Ok(false) => {
                     warn!(target: "loop", "Attributes failed validation");
@@ -149,15 +150,11 @@ impl<Node: FullNodeComponents> KonaExEx<Node> {
                     // out of the pipeline
                     return;
                 }
-            }
-        } else {
-            debug!(target: "loop", "No prepared attributes to validate");
+            },
         };
 
         // Take the next attributes from the pipeline since they're valid.
-        let attributes = if let Some(attributes) = self.pipeline.next() {
-            attributes
-        } else {
+        let Some(attributes) = self.pipeline.next() else {
             error!(target: "loop", "Must have valid attributes");
             return;
         };
@@ -191,7 +188,7 @@ impl<Node: FullNodeComponents> KonaExEx<Node> {
                 self.should_advance_l2_block_cursor = false;
             }
             Err(err) => {
-                error!(target: "loop", ?err, "Failed to fetch next pending l2 safe head: {}", next_l2_block);
+                error!(target: "loop", ?err, "Failed to fetch next pending l2 safe head: {}", next_l2_block)
             }
         }
 
@@ -230,7 +227,7 @@ impl<Node: FullNodeComponents> KonaExEx<Node> {
             self.chain_provider.commit(committed_chain);
 
             if tip_number >= self.cfg.genesis.l1.number {
-                tracing::debug!(target: "loop", "Chain synced to rollup genesis with L1 block number: {}", tip_number);
+                debug!(target: "loop", "Chain synced to rollup genesis with L1 block number: {}", tip_number);
                 self.is_synced_to_l2_genesis = true;
             }
 
@@ -250,11 +247,15 @@ impl<Node: FullNodeComponents> KonaExEx<Node> {
             }
 
             if self.should_advance_l2_block_cursor {
-                self.advance_l2_cursor().await?;
+                if let Err(err) = self.advance_l2_cursor().await {
+                    error!(target: "loop", ?err, "Failed to advance L2 block cursor");
+                }
             }
 
             if let Ok(notification) = self.ctx.notifications.try_recv() {
-                self.handle_exex_notification(notification).await?;
+                if let Err(err) = self.handle_exex_notification(notification).await {
+                    error!(target: "loop", ?err, "Failed to handle ExEx notification");
+                }
             }
 
             if self.ctx.notifications.is_closed() {
@@ -268,7 +269,7 @@ impl<Node: FullNodeComponents> KonaExEx<Node> {
 fn main() -> Result<()> {
     Cli::<KonaArgsExt>::parse().run(|builder, args| async move {
         let Some(cfg) = ROLLUP_CONFIGS.get(&args.l2_chain_id).cloned() else {
-            bail!("Rollup configuration not found for chain id: {}", args.l2_chain_id);
+            bail!("Rollup configuration not found for L2 chain id: {}", args.l2_chain_id);
         };
 
         let node = EthereumNode::default();
