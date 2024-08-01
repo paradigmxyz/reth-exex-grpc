@@ -7,10 +7,8 @@ license.workspace = true
 
 [dependencies]
 # kona
-kona-derive = { git = "https://github.com/ethereum-optimism/kona", branch = "main", features = ["online", "serde"] }
-
-# TODO: add after https://github.com/ethereum-optimism/kona/pull/393
-# superchain-registry = { version = "0.2.2", default-features = false }
+kona-derive = { git = "https://github.com/ethereum-optimism/kona", rev = "4ef271b", features = ["online", "serde"] }
+superchain-registry = { version = "0.2.2", default-features = false }
 
 # needed for compatibility with kona's ChainProvider trait
 anyhow = { version = "1.0.86", default-features = false }
@@ -22,7 +20,7 @@ reth-node-api.workspace = true
 reth-node-ethereum.workspace = true
 
 # alloy
-alloy = { version = "0.1.4", features = ["full"] }
+alloy = { version = "0.2", features = ["full"] }
 alloy-rlp = "0.3.4"
 
 # other

@@ -5,12 +5,13 @@ use eyre::{bail, Result};
 use kona_derive::{
     online::{AlloyL2ChainProvider, EthereumDataSource},
     traits::{ChainProvider, L2ChainProvider, OriginProvider, Pipeline, StepResult},
-    types::{BlockInfo, L2BlockInfo, RollupConfig, StageError, OP_MAINNET_CONFIG},
+    types::{BlockInfo, L2BlockInfo, RollupConfig, StageError},
 };
 use reth::{cli::Cli, transaction_pool::TransactionPool};
 use reth_exex::{ExExContext, ExExEvent, ExExNotification};
 use reth_node_api::FullNodeComponents;
 use reth_node_ethereum::EthereumNode;
+use superchain_registry::ROLLUP_CONFIGS;
 use tracing::{debug, error, info, warn};
 
 mod blobs;
@@ -59,9 +60,7 @@ pub(crate) struct KonaExEx<Node: FullNodeComponents> {
 
 impl<Node: FullNodeComponents> KonaExEx<Node> {
     /// Creates a new instance of the Kona Execution Extension.
-    pub async fn new(ctx: ExExContext<Node>, args: KonaArgsExt) -> Self {
-        // TODO: make chain id configurable
-        let cfg = Arc::new(OP_MAINNET_CONFIG);
+    pub async fn new(ctx: ExExContext<Node>, args: KonaArgsExt, cfg: Arc<RollupConfig>) -> Self {
         let mut chain_provider = LocalChainProvider::new();
         chain_provider.insert_l2_genesis_block(cfg.genesis.l1);
 
@@ -268,8 +267,12 @@ impl<Node: FullNodeComponents> KonaExEx<Node> {
 
 fn main() -> Result<()> {
     Cli::<KonaArgsExt>::parse().run(|builder, args| async move {
+        let Some(cfg) = ROLLUP_CONFIGS.get(&args.l2_chain_id).cloned() else {
+            bail!("Rollup configuration not found for chain id: {}", args.l2_chain_id);
+        };
+
         let node = EthereumNode::default();
-        let kona = move |ctx| async { Ok(KonaExEx::new(ctx, args).await.start()) };
+        let kona = move |ctx| async { Ok(KonaExEx::new(ctx, args, Arc::new(cfg)).await.start()) };
         let handle = builder.node(node).install_exex("Kona", kona).launch().await?;
         handle.wait_for_node_exit().await
     })
