@@ -7,6 +7,7 @@ members = [
   "op-bridge",
   "remote",
   "rollup",
+  "kona"
 ]
 resolver = "2"
 
