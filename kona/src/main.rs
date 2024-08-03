@@ -5,14 +5,14 @@ use eyre::{bail, Result};
 use kona_derive::{
     online::{AlloyL2ChainProvider, EthereumDataSource},
     traits::{ChainProvider, L2ChainProvider, OriginProvider, Pipeline, StepResult},
-    types::{BlockInfo, L2BlockInfo, RollupConfig, StageError},
+    types::{BlockInfo, L2BlockInfo, RollupConfig},
 };
-use reth::{cli::Cli, transaction_pool::TransactionPool};
+use reth::{cli::Cli, rpc::types::engine::JwtSecret, transaction_pool::TransactionPool};
 use reth_exex::{ExExContext, ExExEvent, ExExNotification};
 use reth_node_api::FullNodeComponents;
 use reth_node_ethereum::EthereumNode;
 use superchain_registry::ROLLUP_CONFIGS;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 mod blobs;
 use blobs::ExExBlobProvider;
@@ -61,6 +61,8 @@ pub(crate) struct KonaExEx<Node: FullNodeComponents> {
 impl<Node: FullNodeComponents> KonaExEx<Node> {
     /// Creates a new instance of the Kona Execution Extension.
     pub async fn new(ctx: ExExContext<Node>, args: KonaArgsExt, cfg: Arc<RollupConfig>) -> Self {
+        info!(target: "kona", mode = ?args.validation_mode, "Starting Kona Execution Extension");
+
         let mut chain_provider = LocalChainProvider::new();
         chain_provider.insert_l2_genesis_block(cfg.genesis.l1);
 
@@ -77,10 +79,11 @@ impl<Node: FullNodeComponents> KonaExEx<Node> {
                 cfg.canyon_time.unwrap_or_default(),
             )),
             ValidationMode::EngineApi => Box::new(EngineApiValidator::new_http(
-                // The presence of these variables is enforced by the clap configuration,
-                // so we can safely unwrap them here.
-                args.l2_engine_api_url.unwrap(),
-                args.l2_engine_jwt.unwrap(),
+                args.l2_engine_api_url.expect("Missing L2 engine API URL"),
+                match args.l2_engine_jwt_secret.as_ref() {
+                    Some(fpath) => JwtSecret::from_file(fpath).expect("Invalid L2 JWT secret file"),
+                    None => panic!("Missing L2 engine JWT secret"),
+                },
             )),
         };
 
@@ -118,34 +121,28 @@ impl<Node: FullNodeComponents> KonaExEx<Node> {
     /// Steps the L2 derivation pipeline and validates the prepared attributes.
     async fn step_l2(&mut self) {
         match self.pipeline.step(self.l2_block_cursor).await {
-            StepResult::PreparedAttributes => info!(target: "loop", "Prepared attributes"),
-            StepResult::AdvancedOrigin => info!(target: "loop", "Advanced origin"),
             StepResult::OriginAdvanceErr(err) => {
-                warn!(target: "loop", ?err, "Error advancing origin")
+                error!(target: "kona", %err, "Failed to advance origin");
             }
-            StepResult::StepFailed(err) => match err {
-                StageError::NotEnoughData => {
-                    debug!(target: "loop", "Not enough data to step derivation pipeline");
-                }
-                _ => {
-                    error!(target: "loop", ?err, "Error stepping derivation pipeline");
-                }
-            },
-        }
+            StepResult::StepFailed(err) => {
+                error!(target: "kona", %err, "Failed to step L2 pipeline");
+            }
+            step => debug!(target: "kona", ?step, "Stepped L2 pipeline"),
+        };
 
         // Peek the the next prepared attributes and validate them
         match self.pipeline.peek() {
-            None => debug!(target: "loop", "No prepared attributes to validate"),
+            None => debug!(target: "kona", "No prepared attributes to validate"),
             Some(attributes) => match self.validator.validate(attributes).await {
-                Ok(true) => info!(target: "loop", "Attributes validated"),
+                Ok(true) => info!(target: "kona", "Attributes validated"),
                 Ok(false) => {
-                    warn!(target: "loop", "Attributes failed validation");
+                    warn!(target: "kona", "Attributes failed validation");
                     // If the validation fails, take the attributes out and continue
                     let _ = self.pipeline.next();
                     return;
                 }
                 Err(err) => {
-                    error!(target: "loop", ?err, "Error validating attributes");
+                    error!(target: "kona", ?err, "Error validating attributes");
                     // If the attributes fail validation, retry them without taking them
                     // out of the pipeline
                     return;
@@ -155,7 +152,7 @@ impl<Node: FullNodeComponents> KonaExEx<Node> {
 
         // Take the next attributes from the pipeline since they're valid.
         let Some(attributes) = self.pipeline.next() else {
-            error!(target: "loop", "Must have valid attributes");
+            error!(target: "kona", "Must have valid attributes");
             return;
         };
 
@@ -170,7 +167,7 @@ impl<Node: FullNodeComponents> KonaExEx<Node> {
             attributes.attributes.timestamp,
             self.pipeline.origin().unwrap().number,
         );
-        debug!(target: "loop", "attributes: {:#?}", attributes);
+        debug!(target: "kona", "attributes: {:#?}", attributes);
     }
 
     async fn advance_l2_cursor(&mut self) -> Result<()> {
@@ -188,7 +185,7 @@ impl<Node: FullNodeComponents> KonaExEx<Node> {
                 self.should_advance_l2_block_cursor = false;
             }
             Err(err) => {
-                error!(target: "loop", ?err, "Failed to fetch next pending l2 safe head: {}", next_l2_block)
+                error!(target: "kona", ?err, "Failed to fetch next pending l2 safe head: {}", next_l2_block)
             }
         }
 
@@ -209,14 +206,12 @@ impl<Node: FullNodeComponents> KonaExEx<Node> {
             }
 
             // Find the l2 block cursor associated with the reverted L1 chain tip
-            let l2_cursor = if let Some(c) = self.l1_to_l2_block_cursor.get(&l1_block_info) {
-                *c
-            } else {
+            let Some(l2_cursor) = self.l1_to_l2_block_cursor.get(&l1_block_info) else {
                 bail!("Critical: Failed to get previous cursor for old chain tip");
             };
 
             // Reset the pipeline to the previous L2 block cursor
-            self.l2_block_cursor = l2_cursor;
+            self.l2_block_cursor = *l2_cursor;
             if let Err(err) = self.pipeline.reset(l2_cursor.block_info, l1_block_info).await {
                 bail!("Critical: Failed to reset pipeline: {:?}", err);
             }
@@ -227,8 +222,10 @@ impl<Node: FullNodeComponents> KonaExEx<Node> {
             self.chain_provider.commit(committed_chain);
 
             if tip_number >= self.cfg.genesis.l1.number {
-                debug!(target: "loop", "Chain synced to rollup genesis with L1 block number: {}", tip_number);
+                debug!(target: "kona", "Chain synced to rollup genesis with L1 block number: {}", tip_number);
                 self.is_synced_to_l2_genesis = true;
+            } else {
+                trace!(target: "kona", "Chain not yet synced to rollup genesis. L1 block number: {}", tip_number);
             }
 
             if let Err(err) = self.ctx.events.send(ExExEvent::FinishedHeight(tip_number)) {
@@ -248,19 +245,19 @@ impl<Node: FullNodeComponents> KonaExEx<Node> {
 
             if self.should_advance_l2_block_cursor {
                 if let Err(err) = self.advance_l2_cursor().await {
-                    error!(target: "loop", ?err, "Failed to advance L2 block cursor");
+                    error!(target: "kona", ?err, "Failed to advance L2 block cursor");
                 }
             }
 
             if let Ok(notification) = self.ctx.notifications.try_recv() {
                 if let Err(err) = self.handle_exex_notification(notification).await {
-                    error!(target: "loop", ?err, "Failed to handle ExEx notification");
+                    error!(target: "kona", ?err, "Failed to handle ExEx notification");
                 }
             }
 
             if self.ctx.notifications.is_closed() {
-                warn!(target: "loop", "ExEx notification channel closed, exiting");
-                bail!("ExEx notification channel closed");
+                warn!(target: "kona", "ExEx notification channel closed, exiting");
+                break Ok(());
             }
         }
     }
@@ -268,12 +265,12 @@ impl<Node: FullNodeComponents> KonaExEx<Node> {
 
 fn main() -> Result<()> {
     Cli::<KonaArgsExt>::parse().run(|builder, args| async move {
-        let Some(cfg) = ROLLUP_CONFIGS.get(&args.l2_chain_id).cloned() else {
+        let Some(cfg) = ROLLUP_CONFIGS.get(&args.l2_chain_id).cloned().map(Arc::new) else {
             bail!("Rollup configuration not found for L2 chain id: {}", args.l2_chain_id);
         };
 
         let node = EthereumNode::default();
-        let kona = move |ctx| async { Ok(KonaExEx::new(ctx, args, Arc::new(cfg)).await.start()) };
+        let kona = move |ctx| async { Ok(KonaExEx::new(ctx, args, cfg).await.start()) };
         let handle = builder.node(node).install_exex("Kona", kona).launch().await?;
         handle.wait_for_node_exit().await
     })

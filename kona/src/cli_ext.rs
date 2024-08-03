@@ -1,8 +1,9 @@
 //! CLI Extension module for Kona
 
+use std::path::PathBuf;
+
 use clap::Args;
 use reqwest::Url;
-use reth::rpc::types::engine::JwtSecret;
 
 pub const DEFAULT_L2_CHAIN_ID: u64 = 10;
 
@@ -28,7 +29,7 @@ pub(crate) struct KonaArgsExt {
     #[clap(
         long = "kona.validation-mode",
         default_value = "trusted",
-        requires_ifs([("engine-api", "kona.l2-engine-api-url"), ("engine-api", "kona.l2-engine-jwt")]),
+        requires_ifs([("engine-api", "kona.l2-engine-api-url"), ("engine-api", "kona.l2-engine-jwt-secret")]),
     )]
     pub validation_mode: ValidationMode,
 
@@ -36,9 +37,10 @@ pub(crate) struct KonaArgsExt {
     #[clap(long = "kona.l2-engine-api-url")]
     pub l2_engine_api_url: Option<Url>,
 
-    /// If the mode is "engine api", we also need a JWT for it.
+    /// If the mode is "engine api", we also need a JWT secret for it.
+    /// This MUST be a valid path to a file containing the hex-encoded JWT secret.
     #[clap(long = "kona.l2-engine-jwt")]
-    pub l2_engine_jwt: Option<JwtSecret>,
+    pub l2_engine_jwt_secret: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
