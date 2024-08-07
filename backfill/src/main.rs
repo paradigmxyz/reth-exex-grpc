@@ -7,11 +7,11 @@ use eyre::OptionExt;
 use futures::{FutureExt, TryStreamExt};
 use jsonrpsee::tracing::instrument;
 use reth::{
-    primitives::{BlockId, BlockNumber, BlockNumberOrTag, Requests},
+    primitives::{BlockId, BlockNumber, BlockNumberOrTag},
     providers::{BlockIdReader, BlockReader, HeaderProvider, StateProviderFactory},
 };
 use reth_evm::execute::BlockExecutorProvider;
-use reth_execution_types::{Chain, ExecutionOutcome};
+use reth_execution_types::Chain;
 use reth_exex::{BackfillJob, BackfillJobFactory, ExExContext, ExExEvent, ExExNotification};
 use reth_node_api::FullNodeComponents;
 use reth_node_ethereum::EthereumNode;
@@ -224,19 +224,7 @@ async fn backfill_with_job<
         // Covert the block execution error into `eyre`
         .map_err(Into::into)
         // Process each block, returning early if an error occurs
-        .try_for_each(|(block, output)| async {
-            let sealed_block = block.seal_slow();
-            let execution_outcome = ExecutionOutcome::new(
-                output.state,
-                output.receipts.into(),
-                sealed_block.number,
-                vec![Requests(output.requests)],
-            );
-            let chain = Chain::new([sealed_block], execution_outcome, None);
-
-            // Process the committed blocks
-            process_committed_chain(&chain)
-        })
+        .try_for_each(|chain| async move { process_committed_chain(&chain) })
         .await
 }
 

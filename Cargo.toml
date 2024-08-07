@@ -19,20 +19,20 @@ publish = false
 
 [workspace.dependencies]
 # reth
-reth = { git = "https://github.com/paradigmxyz/reth" }
-reth-chainspec = { git = "https://github.com/paradigmxyz/reth" }
-reth-discv5 = { git = "https://github.com/paradigmxyz/reth" }
-reth-evm = { git = "https://github.com/paradigmxyz/reth" }
-reth-execution-errors = { git = "https://github.com/paradigmxyz/reth" }
-reth-execution-types = { git = "https://github.com/paradigmxyz/reth" }
-reth-exex = { git = "https://github.com/paradigmxyz/reth", features = ["serde"] }
-reth-network-peers = { git = "https://github.com/paradigmxyz/reth" }
-reth-node-api = { git = "https://github.com/paradigmxyz/reth" }
-reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth" }
-reth-primitives = { git = "https://github.com/paradigmxyz/reth" }
-reth-provider = { git = "https://github.com/paradigmxyz/reth" }
-reth-revm = { git = "https://github.com/paradigmxyz/reth" }
-reth-tracing = { git = "https://github.com/paradigmxyz/reth" }
+reth = { git = "https://github.com/paradigmxyz/reth", version = "1.0.4" }
+reth-chainspec = { git = "https://github.com/paradigmxyz/reth", version = "1.0.4" }
+reth-discv5 = { git = "https://github.com/paradigmxyz/reth", version = "1.0.4" }
+reth-execution-errors = { git = "https://github.com/paradigmxyz/reth", version = "1.0.4" }
+reth-execution-types = { git = "https://github.com/paradigmxyz/reth", version = "1.0.4" }
+reth-exex = { git = "https://github.com/paradigmxyz/reth", features = ["serde"], version = "1.0.4" }
+reth-network-peers = { git = "https://github.com/paradigmxyz/reth", version = "1.0.4" }
+reth-node-api = { git = "https://github.com/paradigmxyz/reth", version = "1.0.4" }
+reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", version = "1.0.4" }
+reth-primitives = { git = "https://github.com/paradigmxyz/reth", version = "1.0.4" }
+reth-provider = { git = "https://github.com/paradigmxyz/reth", version = "1.0.4" }
+reth-revm = { git = "https://github.com/paradigmxyz/reth", version = "1.0.4" }
+reth-evm = { git = "https://github.com/paradigmxyz/reth", version = "1.0.4" }
+reth-tracing = { git = "https://github.com/paradigmxyz/reth", version = "1.0.4" }
 
 # alloy
 alloy-sol-types = { version = "0.7", features = ["json"] }
