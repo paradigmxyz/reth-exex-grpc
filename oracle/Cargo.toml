@@ -16,7 +16,7 @@ reth-network-peers.workspace = true
 reth-network.workspace = true
 reth-node-api.workspace = true
 reth-node-ethereum.workspace = true
-reth-primitives.workspace = true
+reth-ethereum-primitives.workspace = true
 reth-tracing.workspace = true
 reth.workspace = true
 
@@ -40,7 +40,7 @@ tokio.workspace = true
 
 
 # misc
-clap = "4" 
+clap = "4"
 eyre.workspace = true
 serde.workspace = true
 serde_json.workspace = true

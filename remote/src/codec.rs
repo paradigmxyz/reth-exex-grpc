@@ -1,7 +1,7 @@
 use crate::proto;
 use alloy_primitives::{Address, BlockHash, Bloom, TxHash, B256, B64, U256};
 use eyre::OptionExt;
-use reth::primitives::Block;
+use revm_bytecode;
 use std::{collections::BTreeMap, sync::Arc};
 
 impl TryFrom<&reth_exex::ExExNotification> for proto::ExExNotification {
@@ -145,7 +145,7 @@ impl TryFrom<&reth::primitives::TransactionSigned> for proto::Transaction {
             y_parity: transaction.signature().v() as u8 as u32,
         };
         let transaction = match &transaction.clone().into_typed_transaction() {
-            reth::primitives::Transaction::Legacy(alloy_consensus::TxLegacy {
+            reth_ethereum_primitives::Transaction::Legacy(alloy_consensus::TxLegacy {
                 chain_id,
                 nonce,
                 gas_price,
@@ -162,7 +162,7 @@ impl TryFrom<&reth::primitives::TransactionSigned> for proto::Transaction {
                 value: value.to_le_bytes_vec(),
                 input: input.to_vec(),
             }),
-            reth::primitives::Transaction::Eip2930(alloy_consensus::TxEip2930 {
+            reth_ethereum_primitives::Transaction::Eip2930(alloy_consensus::TxEip2930 {
                 chain_id,
                 nonce,
                 gas_price,
@@ -181,7 +181,7 @@ impl TryFrom<&reth::primitives::TransactionSigned> for proto::Transaction {
                 access_list: access_list.iter().map(Into::into).collect(),
                 input: input.to_vec(),
             }),
-            reth::primitives::Transaction::Eip1559(alloy_consensus::TxEip1559 {
+            reth_ethereum_primitives::Transaction::Eip1559(alloy_consensus::TxEip1559 {
                 chain_id,
                 nonce,
                 gas_limit,
@@ -202,7 +202,7 @@ impl TryFrom<&reth::primitives::TransactionSigned> for proto::Transaction {
                 access_list: access_list.iter().map(Into::into).collect(),
                 input: input.to_vec(),
             }),
-            reth::primitives::Transaction::Eip4844(alloy_consensus::TxEip4844 {
+            reth_ethereum_primitives::Transaction::Eip4844(alloy_consensus::TxEip4844 {
                 chain_id,
                 nonce,
                 gas_limit,
@@ -230,7 +230,7 @@ impl TryFrom<&reth::primitives::TransactionSigned> for proto::Transaction {
                 max_fee_per_blob_gas: max_fee_per_blob_gas.to_le_bytes().to_vec(),
                 input: input.to_vec(),
             }),
-            reth::primitives::Transaction::Eip7702(alloy_consensus::TxEip7702 {
+            reth_ethereum_primitives::Transaction::Eip7702(alloy_consensus::TxEip7702 {
                 chain_id,
                 nonce,
                 gas_limit,
@@ -340,20 +340,22 @@ impl TryFrom<&reth::revm::bytecode::Bytecode> for proto::Bytecode {
     type Error = eyre::Error;
 
     fn try_from(bytecode: &reth::revm::state::Bytecode) -> Result<Self, Self::Error> {
-        let bytecode = match bytecode {
-            reth::revm::state::Bytecode::LegacyAnalyzed(legacy_analyzed) => {
+        let bytecode = match bytecode.kind() {
+            revm_bytecode::BytecodeKind::LegacyAnalyzed => {
                 proto::bytecode::Bytecode::LegacyAnalyzed(proto::LegacyAnalyzedBytecode {
-                    bytecode: legacy_analyzed.bytecode().to_vec(),
-                    original_len: legacy_analyzed.original_len() as u64,
-                    jump_table: legacy_analyzed.jump_table().as_slice().to_vec(),
-                    jump_table_len: legacy_analyzed.jump_table().len() as u64,
+                    bytecode: bytecode.bytecode().clone().into(),
+                    original_len: bytecode.original_bytes().len() as u64,
+                    jump_table: bytecode.legacy_jump_table().unwrap().as_slice().to_vec(),
+                    jump_table_len: bytecode.legacy_jump_table().unwrap().len() as u64,
                 })
             }
-            reth::revm::state::Bytecode::Eip7702(eip7702) => {
+
+            revm_bytecode::BytecodeKind::Eip7702 => {
+                let raw = bytecode.original_bytes();
                 proto::bytecode::Bytecode::Eip7702(proto::Eip7702Bytecode {
-                    delegated_address: eip7702.delegated_address.to_vec(),
-                    version: eip7702.version as u64,
-                    raw: eip7702.raw.to_vec(),
+                    delegated_address: bytecode.eip7702_address().unwrap().to_vec(),
+                    raw: raw.to_vec(),
+                    version: *(raw.get(2).unwrap()) as u64,
                 })
             }
         };
@@ -426,18 +428,18 @@ impl TryFrom<(Address, &reth::revm::db::states::reverts::AccountRevert)> for pro
     }
 }
 
-impl TryFrom<&reth::primitives::Receipt> for proto::Receipt {
+impl TryFrom<&reth_ethereum_primitives::Receipt> for proto::Receipt {
     type Error = eyre::Error;
 
-    fn try_from(receipt: &reth::primitives::Receipt) -> Result<Self, Self::Error> {
+    fn try_from(receipt: &reth_ethereum_primitives::Receipt) -> Result<Self, Self::Error> {
         Ok(proto::Receipt { receipt: Some(proto::receipt::Receipt::NonEmpty(receipt.try_into()?)) })
     }
 }
 
-impl TryFrom<&reth::primitives::Receipt> for proto::NonEmptyReceipt {
+impl TryFrom<&reth_ethereum_primitives::Receipt> for proto::NonEmptyReceipt {
     type Error = eyre::Error;
 
-    fn try_from(receipt: &reth::primitives::Receipt) -> Result<Self, Self::Error> {
+    fn try_from(receipt: &reth_ethereum_primitives::Receipt) -> Result<Self, Self::Error> {
         Ok(proto::NonEmptyReceipt {
             tx_type: match receipt.tx_type {
                 reth::primitives::TxType::Legacy => proto::TxType::Legacy,
@@ -550,7 +552,7 @@ impl TryFrom<&proto::Chain> for reth::providers::Chain {
     }
 }
 
-impl TryFrom<&proto::Block> for reth::primitives::RecoveredBlock<Block> {
+impl TryFrom<&proto::Block> for reth::primitives::RecoveredBlock<reth_ethereum_primitives::Block> {
     type Error = eyre::Error;
 
     fn try_from(block: &proto::Block) -> Result<Self, Self::Error> {
@@ -569,9 +571,13 @@ impl TryFrom<&proto::Block> for reth::primitives::RecoveredBlock<Block> {
             .map(|sender| Address::try_from(sender.as_slice()))
             .collect::<Result<_, _>>()?;
 
-        Ok(reth::primitives::SealedBlock::<Block>::from_sealed_parts(
+        Ok(reth::primitives::SealedBlock::<reth_ethereum_primitives::Block>::from_sealed_parts(
             sealed_header,
-            reth::primitives::BlockBody { transactions, ommers, withdrawals: Default::default() },
+            reth_ethereum_primitives::BlockBody {
+                transactions,
+                ommers,
+                withdrawals: Default::default(),
+            },
         )
         .with_senders(senders))
     }
@@ -642,7 +648,7 @@ impl TryFrom<&proto::Transaction> for reth::primitives::TransactionSigned {
                 to,
                 value,
                 input,
-            }) => reth::primitives::Transaction::Legacy(alloy_consensus::TxLegacy {
+            }) => reth_ethereum_primitives::Transaction::Legacy(alloy_consensus::TxLegacy {
                 chain_id: *chain_id,
                 nonce: *nonce,
                 gas_price: u128::from_le_bytes(gas_price.as_slice().try_into()?),
@@ -661,7 +667,7 @@ impl TryFrom<&proto::Transaction> for reth::primitives::TransactionSigned {
                 value,
                 access_list,
                 input,
-            }) => reth::primitives::Transaction::Eip2930(alloy_consensus::TxEip2930 {
+            }) => reth_ethereum_primitives::Transaction::Eip2930(alloy_consensus::TxEip2930 {
                 chain_id: *chain_id,
                 nonce: *nonce,
                 gas_price: u128::from_le_bytes(gas_price.as_slice().try_into()?),
@@ -686,7 +692,7 @@ impl TryFrom<&proto::Transaction> for reth::primitives::TransactionSigned {
                 value,
                 access_list,
                 input,
-            }) => reth::primitives::Transaction::Eip1559(alloy_consensus::TxEip1559 {
+            }) => reth_ethereum_primitives::Transaction::Eip1559(alloy_consensus::TxEip1559 {
                 chain_id: *chain_id,
                 nonce: *nonce,
                 gas_limit: u64::from_le_bytes(gas_limit.as_slice().try_into()?),
@@ -716,7 +722,7 @@ impl TryFrom<&proto::Transaction> for reth::primitives::TransactionSigned {
                 blob_versioned_hashes,
                 max_fee_per_blob_gas,
                 input,
-            }) => reth::primitives::Transaction::Eip4844(alloy_consensus::TxEip4844 {
+            }) => reth_ethereum_primitives::Transaction::Eip4844(alloy_consensus::TxEip4844 {
                 chain_id: *chain_id,
                 nonce: *nonce,
                 gas_limit: u64::from_le_bytes(gas_limit.as_slice().try_into()?),
@@ -752,7 +758,7 @@ impl TryFrom<&proto::Transaction> for reth::primitives::TransactionSigned {
                 access_list,
                 authorization_list,
                 input,
-            }) => reth::primitives::Transaction::Eip7702(alloy_consensus::TxEip7702 {
+            }) => reth_ethereum_primitives::Transaction::Eip7702(alloy_consensus::TxEip7702 {
                 chain_id: *chain_id,
                 nonce: *nonce,
                 gas_limit: u64::from_le_bytes(gas_limit.as_slice().try_into()?),
@@ -861,23 +867,17 @@ impl TryFrom<&proto::Bytecode> for reth::revm::state::Bytecode {
     fn try_from(bytecode: &proto::Bytecode) -> Result<Self, Self::Error> {
         Ok(match bytecode.bytecode.as_ref().ok_or_eyre("no bytecode")? {
             proto::bytecode::Bytecode::LegacyAnalyzed(legacy_analyzed) => {
-                reth::revm::state::Bytecode::LegacyAnalyzed(Arc::new(
-                    reth::revm::state::bytecode::LegacyAnalyzedBytecode::new(
-                        legacy_analyzed.bytecode.clone().into(),
-                        legacy_analyzed.original_len as usize,
-                        reth::revm::state::bytecode::JumpTable::from_slice(
-                            legacy_analyzed.jump_table.to_vec().as_slice(),
-                            legacy_analyzed.jump_table_len as usize,
-                        ),
+                revm_bytecode::Bytecode::new_analyzed(
+                    legacy_analyzed.bytecode.clone().into(),
+                    legacy_analyzed.original_len as usize,
+                    reth::revm::state::bytecode::JumpTable::from_slice(
+                        legacy_analyzed.jump_table.to_vec().as_slice(),
+                        legacy_analyzed.jump_table_len as usize,
                     ),
-                ))
+                )
             }
-            proto::bytecode::Bytecode::Eip7702(eip7702) => reth::revm::bytecode::Bytecode::Eip7702(
-                Arc::new(reth::revm::bytecode::eip7702::Eip7702Bytecode {
-                    delegated_address: Address::try_from(eip7702.delegated_address.as_slice())?,
-                    version: eip7702.version as u8,
-                    raw: eip7702.raw.as_slice().to_vec().into(),
-                }),
+            proto::bytecode::Bytecode::Eip7702(eip7702) => revm_bytecode::Bytecode::new_eip7702(
+                Address::try_from(eip7702.delegated_address.as_slice())?,
             ),
         })
     }
@@ -994,7 +994,7 @@ impl TryFrom<&proto::Revert> for (Address, reth::revm::db::states::reverts::Acco
     }
 }
 
-impl TryFrom<&proto::Receipt> for reth::primitives::Receipt {
+impl TryFrom<&proto::Receipt> for reth_ethereum_primitives::Receipt {
     type Error = eyre::Error;
 
     fn try_from(receipt: &proto::Receipt) -> Result<Self, Self::Error> {
@@ -1005,11 +1005,11 @@ impl TryFrom<&proto::Receipt> for reth::primitives::Receipt {
     }
 }
 
-impl TryFrom<&proto::NonEmptyReceipt> for reth::primitives::Receipt {
+impl TryFrom<&proto::NonEmptyReceipt> for reth_ethereum_primitives::Receipt {
     type Error = eyre::Error;
 
     fn try_from(receipt: &proto::NonEmptyReceipt) -> Result<Self, Self::Error> {
-        Ok(reth::primitives::Receipt {
+        Ok(reth_ethereum_primitives::Receipt {
             tx_type: match proto::TxType::try_from(receipt.tx_type)? {
                 proto::TxType::Legacy => reth::primitives::TxType::Legacy,
                 proto::TxType::Eip2930 => reth::primitives::TxType::Eip2930,

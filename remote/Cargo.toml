@@ -11,8 +11,14 @@ publish.workspace = true
 reth-exex.workspace = true
 reth-node-api.workspace = true
 reth-node-ethereum.workspace = true
+reth-primitives-traits.workspace = true
+reth-ethereum-primitives.workspace = true
 reth-tracing.workspace = true
 reth.workspace = true
+
+# revm
+revm-bytecode.workspace = true
+
 
 # alloy
 alloy-consensus.workspace = true

@@ -1,5 +1,6 @@
 use alloy_primitives::{Address, Bytes, B256, U256};
-use reth_primitives::{Block, RecoveredBlock, StorageEntry};
+use reth_ethereum_primitives::Block;
+use reth_primitives_traits::{RecoveredBlock, StorageEntry};
 use reth_provider::OriginalValuesKnown;
 use reth_revm::{
     db::{

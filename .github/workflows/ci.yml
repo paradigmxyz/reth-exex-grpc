@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rust: ["stable", "nightly", "1.88"] # MSRV
+        rust: ["stable", "nightly", "1.93"] # MSRV
         flags: ["", "--all-features"]
     steps:
       - uses: actions/checkout@v5

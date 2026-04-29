@@ -6,15 +6,13 @@ use alloy_eips::{
 use alloy_primitives::{keccak256, Bytes, B256, U256};
 use alloy_rlp::Decodable as _;
 use reth::{api::Block as _, transaction_pool::TransactionPool};
+use reth_chainspec::EthereumHardfork;
+use reth_ethereum_primitives::{Block, BlockBody, Receipt, TransactionSigned, TxType};
 use reth_evm::{precompiles::PrecompilesMap, Evm};
 use reth_execution_errors::BlockValidationError;
 use reth_node_api::ConfigureEvm;
 use reth_node_ethereum::{evm::EthEvm, EthEvmConfig};
-use reth_primitives::{
-    Block, BlockBody, EthereumHardfork, Header, Receipt, Recovered, RecoveredBlock,
-    TransactionSigned, TxType,
-};
-use reth_primitives_traits::SignedTransaction;
+use reth_primitives_traits::{Header, Recovered, RecoveredBlock, SignedTransaction};
 use reth_revm::{
     context::result::{EVMError, ExecutionResult, ResultAndState},
     db::{states::bundle_state::BundleRetention, BundleState, StateBuilder},
@@ -260,10 +258,12 @@ mod tests {
     use alloy_eips::eip2718::Encodable2718;
     use alloy_primitives::{bytes, keccak256, BlockNumber, TxKind, U256};
     use alloy_sol_types::{sol, SolCall};
+    use reth_ethereum_primitives::{Block, Receipt, Transaction};
     use reth_evm::{ConfigureEvm, Evm};
     use reth_node_ethereum::EthEvmConfig;
-    use reth_primitives::{public_key_to_address, Block, Receipt, RecoveredBlock, Transaction};
-    use reth_primitives_traits::constants::MAX_TX_GAS_LIMIT_OSAKA;
+    use reth_primitives_traits::{
+        constants::MAX_TX_GAS_LIMIT_OSAKA, crypto::secp256k1::public_key_to_address, RecoveredBlock,
+    };
     use reth_revm::{
         context::{
             result::{ExecutionResult, Output},

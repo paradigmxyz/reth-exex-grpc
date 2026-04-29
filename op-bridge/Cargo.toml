@@ -11,7 +11,8 @@ reth-execution-types.workspace = true
 reth-exex.workspace = true
 reth-node-api.workspace = true
 reth-node-ethereum.workspace = true
-reth-primitives.workspace = true
+reth-ethereum-primitives.workspace = true
+reth-primitives-traits.workspace = true
 reth-tracing.workspace = true
 reth.workspace = true
 reth-evm.workspace = true
@@ -31,7 +32,7 @@ tokio.workspace = true
 # reth
 reth-exex-test-utils.workspace = true
 reth-testing-utils.workspace = true
-alloy-primitives = { workspace = true, features = ["rand"]}
+alloy-primitives = { workspace = true, features = ["rand"] }
 
 # alloy
 alloy-consensus.workspace = true

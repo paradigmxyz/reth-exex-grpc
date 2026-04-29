@@ -2,9 +2,9 @@ use alloy_consensus::BlockHeader;
 use eyre::Result;
 use futures::{Future, FutureExt, TryStreamExt};
 use reth::{api::NodeTypes, providers::ExecutionOutcome};
+use reth_ethereum_primitives::EthPrimitives;
 use reth_exex::{ExExContext, ExExEvent, ExExNotification};
 use reth_node_api::FullNodeComponents;
-use reth_primitives::EthPrimitives;
 use reth_tracing::tracing::info;
 use std::{
     pin::Pin,

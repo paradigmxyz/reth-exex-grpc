@@ -2,11 +2,12 @@ use alloy_primitives::{address, Address};
 use alloy_sol_types::{sol, SolEventInterface};
 use futures::{Future, FutureExt, TryStreamExt};
 use reth::api::{BlockBody, NodeTypes};
+use reth_ethereum_primitives::{Block, EthPrimitives, TransactionSigned};
 use reth_execution_types::Chain;
 use reth_exex::{ExExContext, ExExEvent};
 use reth_node_api::FullNodeComponents;
 use reth_node_ethereum::EthereumNode;
-use reth_primitives::{Block, EthPrimitives, Log, RecoveredBlock, TransactionSigned};
+use reth_primitives_traits::{Log, RecoveredBlock};
 use reth_tracing::tracing::info;
 use rusqlite::Connection;
 
@@ -283,11 +284,12 @@ mod tests {
     use alloy_primitives::{Address, TxKind, U256};
     use alloy_sol_types::SolEvent;
     use reth::{api::Block as _, revm::db::BundleState};
+    use reth_ethereum_primitives::{
+        Block, BlockBody, Receipt, Transaction, TransactionSigned, TxType,
+    };
     use reth_execution_types::{Chain, ExecutionOutcome};
     use reth_exex_test_utils::{test_exex_context, PollOnce};
-    use reth_primitives::{
-        Block, BlockBody, Header, Log, Receipt, Transaction, TransactionSigned, TxType,
-    };
+    use reth_primitives_traits::{Header, Log};
     use reth_testing_utils::generators::sign_tx_with_random_key_pair;
     use rusqlite::Connection;
     use std::{collections::BTreeMap, pin::pin};

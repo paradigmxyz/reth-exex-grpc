@@ -8,8 +8,8 @@ use alloy_signer::SignerSync;
 use alloy_signer_local::PrivateKeySigner;
 use futures::{FutureExt, Stream, StreamExt};
 use reth::api::NodeTypes;
+use reth_ethereum_primitives::EthPrimitives;
 use reth_node_api::FullNodeComponents;
-use reth_primitives::EthPrimitives;
 use reth_tracing::tracing::{error, info, trace};
 use std::{
     future::Future,
