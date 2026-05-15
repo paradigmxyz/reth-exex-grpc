@@ -1,15 +1,17 @@
-use alloy_primitives::{address, Address};
+use alloy_eips::BlockNumHash;
+use alloy_primitives::{address, Address, B256};
 use alloy_sol_types::{sol, SolEventInterface};
 use futures::{Future, FutureExt, TryStreamExt};
 use reth::api::{BlockBody, NodeTypes};
 use reth_ethereum_primitives::{Block, EthPrimitives, TransactionSigned};
 use reth_execution_types::Chain;
-use reth_exex::{ExExContext, ExExEvent};
+use reth_exex::{ExExContext, ExExEvent, ExExHead, ExExNotificationsStream};
 use reth_node_api::FullNodeComponents;
 use reth_node_ethereum::EthereumNode;
 use reth_primitives_traits::{Log, RecoveredBlock};
 use reth_tracing::tracing::info;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
+use std::str::FromStr;
 
 sol!(L1StandardBridge, "l1_standard_bridge_abi.json");
 use crate::L1StandardBridge::{ETHBridgeFinalized, ETHBridgeInitiated, L1StandardBridgeEvents};
@@ -25,15 +27,22 @@ const OP_BRIDGES: [Address; 6] = [
 
 /// Initializes the ExEx.
 ///
-/// Opens up a SQLite database and creates the tables (if they don't exist).
+/// Opens up a SQLite database, creates the tables (if they don't exist) and configures the
+/// notifications stream to resume from the last block previously persisted to the database (if
+/// any).
 async fn init<Node>(
-    ctx: ExExContext<Node>,
+    mut ctx: ExExContext<Node>,
     mut connection: Connection,
 ) -> eyre::Result<impl Future<Output = eyre::Result<()>>>
 where
     Node: FullNodeComponents<Types: NodeTypes<Primitives = EthPrimitives>>,
 {
     create_tables(&mut connection)?;
+
+    if let Some(head) = read_last_processed_block(&connection)? {
+        info!(?head, "Resuming ExEx from previously persisted head");
+        ctx.notifications.set_with_head(ExExHead::new(head));
+    }
 
     Ok(op_bridge_exex(ctx, connection))
 }
@@ -96,8 +105,77 @@ fn create_tables(connection: &mut Connection) -> rusqlite::Result<()> {
         (),
     )?;
 
+    // Create a key/value table to persist ExEx state across restarts. Used to record the highest
+    // block already processed so the stream can resume via
+    // [`ExExNotificationsStream::set_with_head`].
+    connection.execute(
+        r#"
+            CREATE TABLE IF NOT EXISTS state (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            "#,
+        (),
+    )?;
+
     info!("Initialized database tables");
 
+    Ok(())
+}
+
+/// State table key for the latest processed block number.
+const STATE_KEY_LAST_BLOCK_NUMBER: &str = "last_block_number";
+/// State table key for the latest processed block hash.
+const STATE_KEY_LAST_BLOCK_HASH: &str = "last_block_hash";
+
+/// Reads the latest block number and hash previously persisted by the ExEx.
+///
+/// Returns `Ok(None)` if no block has been processed yet (i.e. the state table is empty).
+fn read_last_processed_block(connection: &Connection) -> eyre::Result<Option<BlockNumHash>> {
+    let number = connection
+        .query_row("SELECT value FROM state WHERE key = ?", (STATE_KEY_LAST_BLOCK_NUMBER,), |row| {
+            row.get::<_, String>(0)
+        })
+        .optional()?
+        .map(|s| s.parse::<u64>())
+        .transpose()?;
+    let hash = connection
+        .query_row("SELECT value FROM state WHERE key = ?", (STATE_KEY_LAST_BLOCK_HASH,), |row| {
+            row.get::<_, String>(0)
+        })
+        .optional()?
+        .map(|s| B256::from_str(&s))
+        .transpose()?;
+    Ok(match (number, hash) {
+        (Some(number), Some(hash)) => Some(BlockNumHash { number, hash }),
+        _ => None,
+    })
+}
+
+/// Records `head` as the latest block fully processed by the ExEx.
+///
+/// Number and hash are written atomically inside a transaction so that an interrupted process
+/// never leaves the state table with mismatched values.
+fn update_last_processed_block(
+    connection: &mut Connection,
+    head: BlockNumHash,
+) -> eyre::Result<()> {
+    let tx = connection.transaction()?;
+    tx.execute(
+        r#"
+            INSERT INTO state (key, value) VALUES (?1, ?2)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+            "#,
+        (STATE_KEY_LAST_BLOCK_NUMBER, head.number.to_string()),
+    )?;
+    tx.execute(
+        r#"
+            INSERT INTO state (key, value) VALUES (?1, ?2)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+            "#,
+        (STATE_KEY_LAST_BLOCK_HASH, head.hash.to_string()),
+    )?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -105,7 +183,7 @@ fn create_tables(connection: &mut Connection) -> rusqlite::Result<()> {
 /// and stores deposits and withdrawals in a SQLite database.
 async fn op_bridge_exex<Node>(
     mut ctx: ExExContext<Node>,
-    connection: Connection,
+    mut connection: Connection,
 ) -> eyre::Result<()>
 where
     Node: FullNodeComponents<Types: NodeTypes<Primitives = EthPrimitives>>,
@@ -205,9 +283,14 @@ where
 
             info!(block_range = ?committed_chain.range(), %deposits, %withdrawals, "Committed chain events");
 
+            // Persist the latest processed block so the ExEx can resume from here on restart via
+            // [`ExExNotificationsStream::set_with_head`].
+            let tip = committed_chain.tip().num_hash();
+            update_last_processed_block(&mut connection, tip)?;
+
             // Send a finished height event, signaling the node that we don't need any blocks below
             // this height anymore
-            ctx.events.send(ExExEvent::FinishedHeight(committed_chain.tip().num_hash()))?;
+            ctx.events.send(ExExEvent::FinishedHeight(tip))?;
         }
     }
 
@@ -420,6 +503,10 @@ mod tests {
             )
         );
 
+        // Assert that the latest processed head was persisted to the `state` table so the ExEx
+        // can resume from here on restart via `ExExNotificationsStream::set_with_head`.
+        assert_eq!(super::read_last_processed_block(&connection)?, Some(block.num_hash()));
+
         // Send a notification that the same chain has been reverted
         handle.send_notification_chain_reverted(chain).await?;
         // Poll the ExEx once, it will process the notification that we just sent
@@ -442,6 +529,53 @@ mod tests {
             })?
             .count();
         assert_eq!(withdrawals, 0);
+
+        // The persisted head is only updated on commit, so after a revert it still reflects the
+        // last committed block we observed.
+        assert_eq!(super::read_last_processed_block(&connection)?, Some(block.num_hash()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn read_last_processed_block_returns_none_when_empty() -> eyre::Result<()> {
+        let db_file = tempfile::NamedTempFile::new()?;
+        let mut connection = Connection::open(&db_file)?;
+        super::create_tables(&mut connection)?;
+        assert_eq!(super::read_last_processed_block(&connection)?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn read_last_processed_block_roundtrip() -> eyre::Result<()> {
+        let db_file = tempfile::NamedTempFile::new()?;
+        let mut connection = Connection::open(&db_file)?;
+        super::create_tables(&mut connection)?;
+
+        let head = BlockNumHash { number: 42, hash: B256::repeat_byte(0xab) };
+        super::update_last_processed_block(&mut connection, head)?;
+        assert_eq!(super::read_last_processed_block(&connection)?, Some(head));
+
+        // Idempotent: updating again with a new head replaces the values.
+        let next = BlockNumHash { number: 43, hash: B256::repeat_byte(0xcd) };
+        super::update_last_processed_block(&mut connection, next)?;
+        assert_eq!(super::read_last_processed_block(&connection)?, Some(next));
+
+        Ok(())
+    }
+
+    #[test]
+    fn read_last_processed_block_none_on_partial_state() -> eyre::Result<()> {
+        let db_file = tempfile::NamedTempFile::new()?;
+        let mut connection = Connection::open(&db_file)?;
+        super::create_tables(&mut connection)?;
+
+        // Insert only the number key; the hash row is missing.
+        connection.execute(
+            "INSERT INTO state (key, value) VALUES (?, ?)",
+            (super::STATE_KEY_LAST_BLOCK_NUMBER, "42"),
+        )?;
+        assert_eq!(super::read_last_processed_block(&connection)?, None);
 
         Ok(())
     }
