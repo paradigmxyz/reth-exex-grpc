@@ -1,3 +1,4 @@
+use alloy_eips::BlockNumHash;
 use alloy_primitives::{Address, Bytes, B256, U256};
 use reth_ethereum_primitives::Block;
 use reth_primitives_traits::{RecoveredBlock, StorageEntry};
@@ -10,7 +11,7 @@ use reth_revm::{
     revm::state::AccountInfo,
     state::Bytecode,
 };
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::{
     collections::{hash_map::Entry, HashMap},
     error::Error,
@@ -51,6 +52,7 @@ impl Database {
             "CREATE TABLE IF NOT EXISTS block (
                 id     INTEGER PRIMARY KEY,
                 number TEXT UNIQUE,
+                hash   TEXT NOT NULL,
                 data   TEXT
             );
             CREATE TABLE IF NOT EXISTS account (
@@ -98,9 +100,10 @@ impl Database {
         let mut connection = self.connection();
         let tx = connection.transaction()?;
 
+        let num_hash = block.num_hash();
         tx.execute(
-            "INSERT INTO block (number, data) VALUES (?, ?)",
-            (block.header().number.to_string(), serde_json::to_string(block)?),
+            "INSERT INTO block (number, hash, data) VALUES (?, ?, ?)",
+            (num_hash.number.to_string(), num_hash.hash.to_string(), serde_json::to_string(block)?),
         )?;
 
         let (changeset, reverts) = bundle.to_plain_state_and_reverts(OriginalValuesKnown::Yes);
@@ -190,9 +193,11 @@ impl Database {
         let mut connection = self.connection();
         let tx = connection.transaction()?;
 
+        // `number` is stored as `TEXT`; cast to `INTEGER` so the highest block is selected
+        // numerically (otherwise SQLite would sort lexicographically — "9" > "10").
         let tip_block_number = tx
             .query_row::<String, _, _>(
-                "SELECT number FROM block ORDER BY number DESC LIMIT 1",
+                "SELECT number FROM block ORDER BY CAST(number AS INTEGER) DESC LIMIT 1",
                 [],
                 |row| row.get(0),
             )
@@ -322,6 +327,29 @@ impl Database {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Returns the number and hash of the highest block previously persisted by the rollup, or
+    /// `None` if no block has been inserted yet.
+    ///
+    /// Used on startup to resume the ExEx notifications stream via
+    /// [`ExExNotificationsStream::set_with_head`](reth_exex::ExExNotificationsStream::set_with_head)
+    /// so that any L1 blocks committed while the rollup was offline are backfilled by reth.
+    pub fn highest_block(&self) -> eyre::Result<Option<BlockNumHash>> {
+        // `number` is stored as `TEXT`, so it must be cast to `INTEGER` before sorting; otherwise
+        // SQLite would sort lexicographically and return e.g. "9" instead of "10".
+        let row = self
+            .connection()
+            .query_row::<(String, String), _, _>(
+                "SELECT number, hash FROM block ORDER BY CAST(number AS INTEGER) DESC LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((number, hash)) = row else { return Ok(None) };
+        let number = number.parse::<u64>()?;
+        let hash = B256::from_str(&hash)?;
+        Ok(Some(BlockNumHash { number, hash }))
     }
 
     /// Insert new account if it does not exist, update otherwise. The provided closure is called
@@ -501,3 +529,56 @@ impl From<eyre::Error> for RollUpDbError {
 }
 
 impl DBErrorMarker for RollUpDbError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn highest_block_returns_none_when_empty() -> eyre::Result<()> {
+        let db = Database::new(Connection::open_in_memory()?)?;
+        assert_eq!(db.highest_block()?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn highest_block_returns_latest_persisted() -> eyre::Result<()> {
+        let db = Database::new(Connection::open_in_memory()?)?;
+
+        {
+            let conn = db.connection();
+            for (number, hash) in [("1", B256::repeat_byte(0x11)), ("2", B256::repeat_byte(0x22))] {
+                conn.execute(
+                    "INSERT INTO block (number, hash, data) VALUES (?, ?, ?)",
+                    (number, hash.to_string(), "{}"),
+                )?;
+            }
+        }
+
+        let head = db.highest_block()?.expect("expected a head");
+        assert_eq!(head, BlockNumHash { number: 2, hash: B256::repeat_byte(0x22) });
+        Ok(())
+    }
+
+    // Regression: `number` is `TEXT`, so without an `INTEGER` cast the highest block would be
+    // chosen lexicographically — "9" would beat "10".
+    #[test]
+    fn highest_block_orders_numerically_not_lexicographically() -> eyre::Result<()> {
+        let db = Database::new(Connection::open_in_memory()?)?;
+
+        {
+            let conn = db.connection();
+            for (number, hash) in [("9", B256::repeat_byte(0x09)), ("10", B256::repeat_byte(0x0a))]
+            {
+                conn.execute(
+                    "INSERT INTO block (number, hash, data) VALUES (?, ?, ?)",
+                    (number, hash.to_string(), "{}"),
+                )?;
+            }
+        }
+
+        let head = db.highest_block()?.expect("expected a head");
+        assert_eq!(head, BlockNumHash { number: 10, hash: B256::repeat_byte(0x0a) });
+        Ok(())
+    }
+}

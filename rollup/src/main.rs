@@ -16,7 +16,7 @@ use reth::api::{BlockBody, NodeTypes};
 use reth_chainspec::{ChainSpec, ChainSpecBuilder};
 use reth_ethereum_primitives::{Block, EthPrimitives, TransactionSigned};
 use reth_execution_types::Chain;
-use reth_exex::{ExExContext, ExExEvent};
+use reth_exex::{ExExContext, ExExEvent, ExExHead, ExExNotificationsStream};
 use reth_node_api::FullNodeComponents;
 use reth_node_ethereum::EthereumNode;
 use reth_primitives_traits::RecoveredBlock;
@@ -53,8 +53,14 @@ impl<Node> Rollup<Node>
 where
     Node: FullNodeComponents<Types: NodeTypes<Primitives = EthPrimitives>>,
 {
-    fn new(ctx: ExExContext<Node>, connection: Connection) -> eyre::Result<Self> {
+    fn new(mut ctx: ExExContext<Node>, connection: Connection) -> eyre::Result<Self> {
         let db = Database::new(connection)?;
+
+        if let Some(head) = db.highest_block()? {
+            info!(?head, "Resuming rollup from previously persisted head");
+            ctx.notifications.set_with_head(ExExHead::new(head));
+        }
+
         Ok(Self { ctx, db })
     }
 
